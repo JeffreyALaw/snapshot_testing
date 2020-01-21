@@ -1,0 +1,13 @@
+diff --git a/gcc/common.opt b/gcc/common.opt
+index 404b6aac298..e7b87820bc9 100644
+--- a/gcc/common.opt
++++ b/gcc/common.opt
+@@ -1131,7 +1131,7 @@ Common Report Var(flag_combine_stack_adjustments) Optimization
+ Looks for opportunities to reduce stack adjustments and stack references.
+ 
+ fcommon
+-Common Report Var(flag_no_common,0) Init(1)
++Common Report Var(flag_no_common,0)
+ Put uninitialized globals in the common section.
+ 
+ fcompare-debug

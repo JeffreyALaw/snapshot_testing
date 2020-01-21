@@ -1,0 +1,396 @@
+diff --git a/gcc/tree-inline.c b/gcc/tree-inline.c
+index d6920f48693..955318997a6 100644
+--- a/gcc/tree-inline.c
++++ b/gcc/tree-inline.c
+@@ -61,7 +61,6 @@ along with GCC; see the file COPYING3.  If not see
+ #include "attribs.h"
+ #include "sreal.h"
+ #include "tree-cfgcleanup.h"
+-#include "tree-ssa-live.h"
+ 
+ /* I'm not real happy about this, but we need to handle gimple and
+    non-gimple trees.  */
+@@ -2343,15 +2342,12 @@ update_ssa_across_abnormal_edges (basic_block bb, basic_block ret_bb,
+ }
+ 
+ /* Insert clobbers for automatic variables of inlined ID->src_fn
+-   function at the start of basic block ID->eh_landing_pad_dest.  */
++   function at the start of basic block BB.  */
+ 
+ static void
+-add_clobbers_to_eh_landing_pad (copy_body_data *id)
++add_clobbers_to_eh_landing_pad (basic_block bb, copy_body_data *id)
+ {
+   tree var;
+-  basic_block bb = id->eh_landing_pad_dest;
+-  live_vars_map *vars = NULL;
+-  unsigned int cnt = 0;
+   unsigned int i;
+   FOR_EACH_VEC_SAFE_ELT (id->src_cfun->local_decls, i, var)
+     if (VAR_P (var)
+@@ -2373,47 +2369,12 @@ add_clobbers_to_eh_landing_pad (copy_body_data *id)
+ 	    && !is_gimple_reg (new_var)
+ 	    && auto_var_in_fn_p (new_var, id->dst_fn))
+ 	  {
+-	    if (vars == NULL)
+-	      vars = new live_vars_map;
+-            vars->put (DECL_UID (var), cnt++);
+-	  }
+-      }
+-  if (vars == NULL)
+-    return;
+-
+-  vec<bitmap_head> live = compute_live_vars (id->src_cfun, vars);
+-  FOR_EACH_VEC_SAFE_ELT (id->src_cfun->local_decls, i, var)
+-    if (VAR_P (var))
+-      {
+-	edge e;
+-	edge_iterator ei;
+-	bool needed = false;
+-	unsigned int *v = vars->get (DECL_UID (var));
+-	if (v == NULL)
+-	  continue;
+-	FOR_EACH_EDGE (e, ei, bb->preds)
+-	  if ((e->flags & EDGE_EH) != 0
+-	      && e->src->index >= id->add_clobbers_to_eh_landing_pads)
+-	    {
+-	      basic_block src_bb = (basic_block) e->src->aux;
+-
+-	      if (bitmap_bit_p (&live[src_bb->index], *v))
+-		{
+-		  needed = true;
+-		  break;
+-		}
+-	    }
+-	if (needed)
+-	  {
+-	    tree new_var = *id->decl_map->get (var);
+ 	    gimple_stmt_iterator gsi = gsi_after_labels (bb);
+ 	    tree clobber = build_clobber (TREE_TYPE (new_var));
+ 	    gimple *clobber_stmt = gimple_build_assign (new_var, clobber);
+ 	    gsi_insert_before (&gsi, clobber_stmt, GSI_NEW_STMT);
+ 	  }
+       }
+-  destroy_live_vars (live);
+-  delete vars;
+ }
+ 
+ /* Copy edges from BB into its copy constructed earlier, scale profile
+@@ -2548,10 +2509,8 @@ copy_edges_for_bb (basic_block bb, profile_count num, profile_count den,
+ 		  e->probability = profile_probability::never ();
+ 		if (e->dest->index < id->add_clobbers_to_eh_landing_pads)
+ 		  {
+-		    if (id->eh_landing_pad_dest == NULL)
+-		      id->eh_landing_pad_dest = e->dest;
+-		    else
+-		      gcc_assert (id->eh_landing_pad_dest == e->dest);
++		    add_clobbers_to_eh_landing_pad (e->dest, id);
++		    id->add_clobbers_to_eh_landing_pads = 0;
+ 		  }
+ 	      }
+         }
+@@ -3006,12 +2965,6 @@ copy_cfg_body (copy_body_data * id,
+       need_debug_cleanup |= copy_edges_for_bb (bb, num, den, exit_block_map,
+ 					       abnormal_goto_dest, id);
+ 
+-  if (id->eh_landing_pad_dest)
+-    {
+-      add_clobbers_to_eh_landing_pad (id);
+-      id->eh_landing_pad_dest = NULL;
+-    }
+-
+   if (new_entry)
+     {
+       edge e = make_edge (entry_block_map, (basic_block)new_entry->aux,
+diff --git a/gcc/tree-inline.h b/gcc/tree-inline.h
+index b226dc03833..f4bc388ae46 100644
+--- a/gcc/tree-inline.h
++++ b/gcc/tree-inline.h
+@@ -163,10 +163,6 @@ struct copy_body_data
+      when inlining a call within an OpenMP SIMD-on-SIMT loop.  */
+   vec<tree> *dst_simt_vars;
+ 
+-  /* Basic block to which clobbers for local variables from the inline
+-     function that need to live in memory should be added.  */
+-  basic_block eh_landing_pad_dest;
+-
+   /* If clobbers for local variables from the inline function
+      that need to live in memory should be added to EH landing pads
+      outside of the inlined function, this should be the number
+diff --git a/gcc/tree-ssa-live.c b/gcc/tree-ssa-live.c
+index 99087946c3e..e16e3fe5a3f 100644
+--- a/gcc/tree-ssa-live.c
++++ b/gcc/tree-ssa-live.c
+@@ -41,8 +41,6 @@ along with GCC; see the file COPYING3.  If not see
+ #include "stringpool.h"
+ #include "attribs.h"
+ #include "optinfo.h"
+-#include "gimple-walk.h"
+-#include "cfganal.h"
+ 
+ static void verify_live_on_entry (tree_live_info_p);
+ 
+@@ -1196,149 +1194,8 @@ calculate_live_ranges (var_map map, bool want_livein)
+ 
+   return live;
+ }
+-
+-/* Data structure for compute_live_vars* functions.  */
+-
+-struct compute_live_vars_data {
+-  /* Vector of bitmaps for live vars indices at the end of basic blocks,
+-     indexed by bb->index.  ACTIVE[ENTRY_BLOCK] must be empty bitmap,
+-     ACTIVE[EXIT_BLOCK] is used for STOP_AFTER.  */
+-  vec<bitmap_head> active;
+-  /* Work bitmap of currently live variables.  */
+-  bitmap work;
+-  /* Set of interesting variables.  Variables with uids not in this
+-     hash_map are not tracked.  */
+-  live_vars_map *vars;
+-};
+-
+-/* Callback for walk_stmt_load_store_addr_ops.  If OP is a VAR_DECL with
+-   uid set in DATA->vars, enter its corresponding index into bitmap
+-   DATA->work.  */
+ 
+-static bool
+-compute_live_vars_visit (gimple *, tree op, tree, void *pdata)
+-{
+-  compute_live_vars_data *data = (compute_live_vars_data *) pdata;
+-  op = get_base_address (op);
+-  if (op && VAR_P (op))
+-    if (unsigned int *v = data->vars->get (DECL_UID (op)))
+-      bitmap_set_bit (data->work, *v);
+-  return false;
+-}
+-
+-/* Helper routine for compute_live_vars, calculating the sets of live
+-   variables at the end of BB, leaving the result in DATA->work.
+-   If STOP_AFTER is non-NULL, stop processing after that stmt.  */
+-
+-static void
+-compute_live_vars_1 (basic_block bb, compute_live_vars_data *data,
+-		     gimple *stop_after)
+-{
+-  edge e;
+-  edge_iterator ei;
+-  gimple_stmt_iterator gsi;
+-  walk_stmt_load_store_addr_fn visit = compute_live_vars_visit;
+-
+-  bitmap_clear (data->work);
+-  FOR_EACH_EDGE (e, ei, bb->preds)
+-    bitmap_ior_into (data->work, &data->active[e->src->index]);
+-
+-  for (gsi = gsi_start_phis (bb); !gsi_end_p (gsi); gsi_next (&gsi))
+-    walk_stmt_load_store_addr_ops (gsi_stmt (gsi), data, NULL, NULL, visit);
+-  for (gsi = gsi_after_labels (bb); !gsi_end_p (gsi); gsi_next (&gsi))
+-    {
+-      gimple *stmt = gsi_stmt (gsi);
+-
+-      if (gimple_clobber_p (stmt))
+-	{
+-	  tree lhs = gimple_assign_lhs (stmt);
+-	  if (VAR_P (lhs))
+-	    if (unsigned int *v = data->vars->get (DECL_UID (lhs)))
+-	      bitmap_clear_bit (data->work, *v);
+-	}
+-      else if (!is_gimple_debug (stmt))
+-	walk_stmt_load_store_addr_ops (stmt, data, visit, visit, visit);
+-      if (stmt == stop_after)
+-	break;
+-    }
+-}
+-
+-/* For function FN and live_vars_map (hash map from DECL_UIDs to a dense set of
+-   indexes of automatic variables VARS, compute which of those variables are
+-   (might be) live at the end of each basic block.  */
+-
+-vec<bitmap_head>
+-compute_live_vars (struct function *fn, live_vars_map *vars)
+-{
+-  vec<bitmap_head> active;
+ 
+-  /* We approximate the live range of a stack variable by taking the first
+-     mention of its name as starting point(s), and by the end-of-scope
+-     death clobber added by gimplify as ending point(s) of the range.
+-     This overapproximates in the case we for instance moved an address-taken
+-     operation upward, without also moving a dereference to it upwards.
+-     But it's conservatively correct as a variable never can hold values
+-     before its name is mentioned at least once.
+-
+-     We then do a mostly classical bitmap liveness algorithm.  */
+-
+-  active.create (last_basic_block_for_fn (fn));
+-  active.quick_grow (last_basic_block_for_fn (fn));
+-  for (int i = 0; i < last_basic_block_for_fn (fn); i++)
+-    bitmap_initialize (&active[i], &bitmap_default_obstack);
+-
+-  bitmap work = BITMAP_ALLOC (NULL);
+-
+-  int *rpo = XNEWVEC (int, last_basic_block_for_fn (fn));
+-  int n_bbs = pre_and_rev_post_order_compute_fn (fn, NULL, rpo, false);
+-
+-  bool changed = true;
+-  compute_live_vars_data data = { active, work, vars };
+-  while (changed)
+-    {
+-      int i;
+-      changed = false;
+-      for (i = 0; i < n_bbs; i++)
+-	{
+-	  basic_block bb = BASIC_BLOCK_FOR_FN (fn, rpo[i]);
+-	  compute_live_vars_1 (bb, &data, NULL);
+-	  if (bitmap_ior_into (&active[bb->index], work))
+-	    changed = true;
+-	}
+-    }
+-
+-  free (rpo);
+-  BITMAP_FREE (work);
+-
+-  return active;
+-}
+-
+-/* For ACTIVE computed by compute_live_vars, compute a bitmap of variables
+-   live after the STOP_AFTER statement and return that bitmap.  */
+-
+-bitmap
+-live_vars_at_stmt (vec<bitmap_head> &active, live_vars_map *vars,
+-		   gimple *stop_after)
+-{
+-  bitmap work = BITMAP_ALLOC (NULL);
+-  compute_live_vars_data data = { active, work, vars };
+-  basic_block bb = gimple_bb (stop_after);
+-  compute_live_vars_1 (bb, &data, stop_after);
+-  return work;
+-}
+-
+-/* Destroy what compute_live_vars has returned when it is no longer needed.  */
+-
+-void
+-destroy_live_vars (vec<bitmap_head> &active)
+-{
+-  unsigned len = active.length ();
+-  for (unsigned i = 0; i < len; i++)
+-    bitmap_clear (&active[i]);
+-
+-  active.release ();
+-}
+-
+ /* Output partition map MAP to file F.  */
+ 
+ void
+diff --git a/gcc/tree-ssa-live.h b/gcc/tree-ssa-live.h
+index 5bef4d5d767..fbf76fa3c5d 100644
+--- a/gcc/tree-ssa-live.h
++++ b/gcc/tree-ssa-live.h
+@@ -266,11 +266,6 @@ extern void debug (tree_live_info_d &ref);
+ extern void debug (tree_live_info_d *ptr);
+ extern void dump_live_info (FILE *, tree_live_info_p, int);
+ 
+-typedef hash_map<int_hash <unsigned int, -1U>, unsigned int> live_vars_map;
+-extern vec<bitmap_head> compute_live_vars (struct function *, live_vars_map *);
+-extern bitmap live_vars_at_stmt (vec<bitmap_head> &, live_vars_map *,
+-				 gimple *);
+-extern void destroy_live_vars (vec<bitmap_head> &);
+ 
+ /*  Return TRUE if P is marked as a global in LIVE.  */
+ 
+diff --git a/gcc/tree-tailcall.c b/gcc/tree-tailcall.c
+index 4824a5e650f..80c7d55cbd1 100644
+--- a/gcc/tree-tailcall.c
++++ b/gcc/tree-tailcall.c
+@@ -42,7 +42,6 @@ along with GCC; see the file COPYING3.  If not see
+ #include "cfgloop.h"
+ #include "common/common-target.h"
+ #include "ipa-utils.h"
+-#include "tree-ssa-live.h"
+ 
+ /* The file implements the tail recursion elimination.  It is also used to
+    analyze the tail calls in general, passing the results to the rtl level
+@@ -404,11 +403,6 @@ propagate_through_phis (tree var, edge e)
+   return var;
+ }
+ 
+-/* Argument for compute_live_vars/live_vars_at_stmt and what compute_live_vars
+-   returns.  Computed lazily, but just once for the function.  */
+-static live_vars_map *live_vars;
+-static vec<bitmap_head> live_vars_vec;
+-
+ /* Finds tailcalls falling into basic block BB. The list of found tailcalls is
+    added to the start of RET.  */
+ 
+@@ -565,29 +559,6 @@ find_tail_calls (basic_block bb, struct tailcall **ret)
+ 	tail_recursion = true;
+     }
+ 
+-  /* Compute live vars if not computed yet.  */
+-  if (live_vars == NULL)
+-    {
+-      unsigned int cnt = 0;
+-      FOR_EACH_LOCAL_DECL (cfun, idx, var)
+-	if (VAR_P (var)
+-	    && auto_var_in_fn_p (var, cfun->decl)
+-	    && may_be_aliased (var))
+-	  {
+-	    if (live_vars == NULL)
+-	      live_vars = new live_vars_map;
+-	    live_vars->put (DECL_UID (var), cnt++);
+-	  }
+-      if (live_vars)
+-	live_vars_vec = compute_live_vars (cfun, live_vars);
+-    }
+-
+-  /* Determine a bitmap of variables which are still in scope after the
+-     call.  */
+-  bitmap local_live_vars = NULL;
+-  if (live_vars)
+-    local_live_vars = live_vars_at_stmt (live_vars_vec, live_vars, call);
+-
+   /* Make sure the tail invocation of this function does not indirectly
+      refer to local variables.  (Passing variables directly by value
+      is OK.)  */
+@@ -598,28 +569,9 @@ find_tail_calls (basic_block bb, struct tailcall **ret)
+ 	  && may_be_aliased (var)
+ 	  && (ref_maybe_used_by_stmt_p (call, var)
+ 	      || call_may_clobber_ref_p (call, var)))
+-	{
+-	  if (!VAR_P (var))
+-	    {
+-	      if (local_live_vars)
+-		BITMAP_FREE (local_live_vars);
+-	      return;
+-	    }
+-	  else
+-	    {
+-	      unsigned int *v = live_vars->get (DECL_UID (var));
+-	      if (bitmap_bit_p (local_live_vars, *v))
+-		{
+-		  BITMAP_FREE (local_live_vars);
+-		  return;
+-		}
+-	    }
+-	}
++	return;
+     }
+ 
+-  if (local_live_vars)
+-    BITMAP_FREE (local_live_vars);
+-
+   /* Now check the statements after the call.  None of them has virtual
+      operands, so they may only depend on the call through its return
+      value.  The return value should also be dependent on each of them,
+@@ -1113,13 +1065,6 @@ tree_optimize_tail_calls_1 (bool opt_tailcalls)
+ 	find_tail_calls (e->src, &tailcalls);
+     }
+ 
+-  if (live_vars)
+-    {
+-      destroy_live_vars (live_vars_vec);
+-      delete live_vars;
+-      live_vars = NULL;
+-    }
+-
+   /* Construct the phi nodes and accumulators if necessary.  */
+   a_acc = m_acc = NULL_TREE;
+   for (act = tailcalls; act; act = act->next)

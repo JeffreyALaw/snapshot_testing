@@ -1,0 +1,17 @@
+diff --git a/gcc/tree-ssa-structalias.c b/gcc/tree-ssa-structalias.c
+index 68298ea7eb2..83739be0cd6 100644
+--- a/gcc/tree-ssa-structalias.c
++++ b/gcc/tree-ssa-structalias.c
+@@ -4983,9 +4983,12 @@ find_func_aliases (struct function *fn, gimple *origt)
+ 	  if (code == POINTER_PLUS_EXPR)
+ 	    get_constraint_for_ptr_offset (gimple_assign_rhs1 (t),
+ 					   gimple_assign_rhs2 (t), &rhsc);
++#if 0
++	  /* This breaks libqb and possibly other packages.  */
+ 	  else if (code == POINTER_DIFF_EXPR)
+ 	    /* The result is not a pointer (part).  */
+ 	    ;
++#endif
+ 	  else if (code == BIT_AND_EXPR
+ 		   && TREE_CODE (gimple_assign_rhs2 (t)) == INTEGER_CST)
+ 	    {

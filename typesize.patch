@@ -1,0 +1,20 @@
+diff --git a/gcc/tree-ssa-strlen.c b/gcc/tree-ssa-strlen.c
+index 43814584a14..cfca7e7d54f 100644
+--- a/gcc/tree-ssa-strlen.c
++++ b/gcc/tree-ssa-strlen.c
+@@ -3483,6 +3483,7 @@ determine_min_objsize (tree dest)
+       return determine_min_objsize (dest);
+     }
+ 
++#if 0
+   /* Try to determine the size of the object from its type.  */
+   if (TREE_CODE (dest) != ADDR_EXPR)
+     return HOST_WIDE_INT_M1U;
+@@ -3506,6 +3507,7 @@ determine_min_objsize (tree dest)
+ 	  && !integer_zerop (type_size))
+         return tree_to_uhwi (type_size);
+     }
++#endif
+ 
+   return HOST_WIDE_INT_M1U;
+ }
