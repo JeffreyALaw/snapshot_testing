@@ -1905,22 +1905,22 @@ echo gcc-%{version}-%{release}.%{_arch} > $FULLPATH/rpmver
 cd obj-%{gcc_target_platform}
 
 # run the tests.
-LC_ALL=C make %{?_smp_mflags} -k check ALT_CC_UNDER_TEST=gcc ALT_CXX_UNDER_TEST=g++ \
-%if 0%{?fedora} >= 20 || 0%{?rhel} > 7
-     RUNTESTFLAGS="--target_board=unix/'{,-fstack-protector-strong}'" || :
-%else
-     RUNTESTFLAGS="--target_board=unix/'{,-fstack-protector}'" || :
-%endif
-echo ====================TESTING=========================
-( LC_ALL=C ../contrib/test_summary || : ) 2>&1 | sed -n '/^cat.*EOF/,/^EOF/{/^cat.*EOF/d;/^EOF/d;/^LAST_UPDATED:/d;p;}'
-echo ====================TESTING END=====================
-mkdir testlogs-%{_target_platform}-%{version}-%{release}
-for i in `find . -name \*.log | grep -F testsuite/ | grep -v 'config.log\|acats.*/tests/'`; do
-  ln $i testlogs-%{_target_platform}-%{version}-%{release}/ || :
-done
-tar cf - testlogs-%{_target_platform}-%{version}-%{release} | xz -9e \
-  | uuencode testlogs-%{_target_platform}.tar.xz || :
-rm -rf testlogs-%{_target_platform}-%{version}-%{release}
+#LC_ALL=C make %{?_smp_mflags} -k check ALT_CC_UNDER_TEST=gcc ALT_CXX_UNDER_TEST=g++ \
+#%if 0%{?fedora} >= 20 || 0%{?rhel} > 7
+#     RUNTESTFLAGS="--target_board=unix/'{,-fstack-protector-strong}'" || :
+#%else
+#     RUNTESTFLAGS="--target_board=unix/'{,-fstack-protector}'" || :
+#%endif
+#echo ====================TESTING=========================
+#( LC_ALL=C ../contrib/test_summary || : ) 2>&1 | sed -n '/^cat.*EOF/,/^EOF/{/^cat.*EOF/d;/^EOF/d;/^LAST_UPDATED:/d;p;}'
+#echo ====================TESTING END=====================
+#mkdir testlogs-%{_target_platform}-%{version}-%{release}
+#for i in `find . -name \*.log | grep -F testsuite/ | grep -v 'config.log\|acats.*/tests/'`; do
+#  ln $i testlogs-%{_target_platform}-%{version}-%{release}/ || :
+#done
+#tar cf - testlogs-%{_target_platform}-%{version}-%{release} | xz -9e \
+#  | uuencode testlogs-%{_target_platform}.tar.xz || :
+#rm -rf testlogs-%{_target_platform}-%{version}-%{release}
 
 %post go
 %{_sbindir}/update-alternatives --install \
