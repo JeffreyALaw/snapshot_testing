@@ -1,10 +1,10 @@
-%global DATE 20200121
-%global gitrev 0d664c7566fe5bf444420c5333401ac056e1a5d6
+%global DATE 20200126
+%global gitrev 834af6f1f10cfe4642e6f690f0c7b6dae44de101
 %global gcc_version 10.0.1
 %global gcc_major 10
 # Note, gcc_release must be integer, if you want to add suffixes to
 # %%{release}, append them after %%{gcc_release} on Release: line.
-%global gcc_release 1.4
+%global gcc_release 1.6
 %global nvptx_tools_gitrev 5f6f343a302d620b0868edab376c00b15741e39e
 %global newlib_cygwin_gitrev 50e2a63b04bdd018484605fbb954fd1bd5147fa0
 %global _unpackaged_files_terminate_build 0
@@ -29,13 +29,13 @@
 %global build_go 0
 %global build_d 0
 %else
-%ifarch %{ix86} x86_64 ia64 ppc %{power64} alpha s390x %{arm} aarch64
+%ifarch %{ix86} x86_64 ia64 ppc %{power64} alpha s390x %{arm} aarch64 riscv64
 %global build_ada 1
 %else
 %global build_ada 0
 %endif
 %global build_objc 1
-%ifarch %{ix86} x86_64 ppc ppc64 ppc64le ppc64p7 s390 s390x %{arm} aarch64 %{mips}
+%ifarch %{ix86} x86_64 ppc ppc64 ppc64le ppc64p7 s390 s390x %{arm} aarch64 %{mips} riscv64
 %global build_go 1
 %else
 %global build_go 0
@@ -71,7 +71,7 @@
 %else
 %global build_libubsan 0
 %endif
-%ifarch %{ix86} x86_64 ppc ppc64 ppc64le ppc64p7 s390 s390x %{arm} aarch64 %{mips}
+%ifarch %{ix86} x86_64 ppc ppc64 ppc64le ppc64p7 s390 s390x %{arm} aarch64 %{mips} riscv64
 %global build_libatomic 1
 %else
 %global build_libatomic 0
@@ -259,7 +259,7 @@ Patch8: gcc10-foffload-default.patch
 Patch9: gcc10-Wno-format-security.patch
 Patch10: gcc10-rh1574936.patch
 Patch11: gcc10-d-shared-libphobos.patch
-Patch12: gcc10-libcpp-lex-workaround.patch
+Patch12: gcc10-pr92765-workaround.patch
 
 Patch2000: sanitizer.patch
 Patch2001: sibcall.patch
@@ -267,6 +267,7 @@ Patch2002: typesize.patch
 Patch2003: nocommon.patch
 Patch2004: pointerdiff.patch
 Patch2005: pr93166.patch
+
 
 # On ARM EABI systems, we do want -gnueabi to be part of the
 # target triple.
@@ -288,7 +289,7 @@ Patch2005: pr93166.patch
 %if %{build_go}
 # Avoid stripping these libraries and binaries.
 %global __os_install_post \
-chmod 644 %{buildroot}%{_prefix}/%{_lib}/libgo.so.15.* \
+chmod 644 %{buildroot}%{_prefix}/%{_lib}/libgo.so.16.* \
 chmod 644 %{buildroot}%{_prefix}/bin/go.gcc \
 chmod 644 %{buildroot}%{_prefix}/bin/gofmt.gcc \
 chmod 644 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}/cgo \
@@ -296,7 +297,7 @@ chmod 644 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}
 chmod 644 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}/test2json \
 chmod 644 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}/vet \
 %__os_install_post \
-chmod 755 %{buildroot}%{_prefix}/%{_lib}/libgo.so.15.* \
+chmod 755 %{buildroot}%{_prefix}/%{_lib}/libgo.so.16.* \
 chmod 755 %{buildroot}%{_prefix}/bin/go.gcc \
 chmod 755 %{buildroot}%{_prefix}/bin/gofmt.gcc \
 chmod 755 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}/cgo \
@@ -778,15 +779,14 @@ to NVidia PTX capable devices if available.
 %patch10 -p0 -b .rh1574936~
 %endif
 %patch11 -p0 -b .d-shared-libphobos~
-%patch12 -p0 -b .libcpp-lex-workaround~
+%patch12 -p0 -b .pr92765-workaround~
 
 %patch2000 -p1
 %patch2001 -p1
-%patch2002 -p1
+#%patch2002 -p1
 %patch2003 -p1
 %patch2004 -p1
 %patch2005 -p1
-
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
 
 cp -a libstdc++-v3/config/cpu/i{4,3}86/atomicity.h
@@ -905,7 +905,7 @@ CONFIGURE_OPTS="\
 %ifarch ppc64le
 	--enable-targets=powerpcle-linux \
 %endif
-%ifarch ppc64le %{mips} riscv64 s390x
+%ifarch ppc64le %{mips} s390x
 %ifarch s390x
 %if 0%{?fedora} < 32
 	--enable-multilib \
@@ -1014,6 +1014,9 @@ CONFIGURE_OPTS="\
 %endif
 %ifarch mips64 mips64el
 	--with-arch=mips64r2 --with-abi=64 \
+%endif
+%ifarch riscv64
+	--with-arch=rv64gc --with-abi=lp64d --with-multilib-list=lp64d \
 %endif
 %ifnarch sparc sparcv9 ppc
 	--build=%{gcc_target_platform} \
@@ -1129,6 +1132,19 @@ find rpm.doc -name \*ChangeLog\* | xargs bzip2 -9
 
 %install
 rm -rf %{buildroot}
+mkdir -p %{buildroot}
+
+# RISC-V ABI wants to install everything in /lib64/lp64d or /usr/lib64/lp64d.
+# Make these be symlinks to /lib64 or /usr/lib64 respectively. See:
+# https://lists.fedoraproject.org/archives/list/devel@lists.fedoraproject.org/thread/DRHT5YTPK4WWVGL3GIN5BF2IKX2ODHZ3/
+%ifarch riscv64
+for d in %{buildroot}%{_libdir} %{buildroot}/%{_lib} \
+	  %{buildroot}%{_datadir}/gdb/auto-load/%{_prefix}/%{_lib} \
+	  %{buildroot}%{_prefix}/include/c++/%{gcc_major}/%{gcc_target_platform}/%{_lib}; do
+  mkdir -p $d
+  (cd $d && ln -sf . lp64d)
+done
+%endif
 
 %if %{build_offload_nvptx}
 cd nvptx-tools-%{nvptx_tools_gitrev}
@@ -1365,7 +1381,7 @@ ln -sf ../../../libstdc++.so.6.*[0-9] libstdc++.so
 ln -sf ../../../libgfortran.so.5.* libgfortran.so
 ln -sf ../../../libgomp.so.1.* libgomp.so
 %if %{build_go}
-ln -sf ../../../libgo.so.15.* libgo.so
+ln -sf ../../../libgo.so.16.* libgo.so
 %endif
 %if %{build_libquadmath}
 ln -sf ../../../libquadmath.so.0.* libquadmath.so
@@ -1395,7 +1411,7 @@ ln -sf ../../../../%{_lib}/libstdc++.so.6.*[0-9] libstdc++.so
 ln -sf ../../../../%{_lib}/libgfortran.so.5.* libgfortran.so
 ln -sf ../../../../%{_lib}/libgomp.so.1.* libgomp.so
 %if %{build_go}
-ln -sf ../../../../%{_lib}/libgo.so.15.* libgo.so
+ln -sf ../../../../%{_lib}/libgo.so.16.* libgo.so
 %endif
 %if %{build_libquadmath}
 ln -sf ../../../../%{_lib}/libquadmath.so.0.* libquadmath.so
@@ -1515,8 +1531,8 @@ ln -sf ../`echo ../../../../lib/libgfortran.so.5.* | sed s~/lib/~/lib64/~` 64/li
 ln -sf ../`echo ../../../../lib/libgomp.so.1.* | sed s~/lib/~/lib64/~` 64/libgomp.so
 %if %{build_go}
 rm -f libgo.so
-echo 'INPUT ( %{_prefix}/lib/'`echo ../../../../lib/libgo.so.15.* | sed 's,^.*libg,libg,'`' )' > libgo.so
-echo 'INPUT ( %{_prefix}/lib64/'`echo ../../../../lib/libgo.so.15.* | sed 's,^.*libg,libg,'`' )' > 64/libgo.so
+echo 'INPUT ( %{_prefix}/lib/'`echo ../../../../lib/libgo.so.16.* | sed 's,^.*libg,libg,'`' )' > libgo.so
+echo 'INPUT ( %{_prefix}/lib64/'`echo ../../../../lib/libgo.so.16.* | sed 's,^.*libg,libg,'`' )' > 64/libgo.so
 %endif
 %if %{build_libquadmath}
 rm -f libquadmath.so
@@ -1614,8 +1630,8 @@ ln -sf ../`echo ../../../../lib64/libgfortran.so.5.* | sed s~/../lib64/~/~` 32/l
 ln -sf ../`echo ../../../../lib64/libgomp.so.1.* | sed s~/../lib64/~/~` 32/libgomp.so
 %if %{build_go}
 rm -f libgo.so
-echo 'INPUT ( %{_prefix}/lib64/'`echo ../../../../lib64/libgo.so.15.* | sed 's,^.*libg,libg,'`' )' > libgo.so
-echo 'INPUT ( %{_prefix}/lib/'`echo ../../../../lib64/libgo.so.15.* | sed 's,^.*libg,libg,'`' )' > 32/libgo.so
+echo 'INPUT ( %{_prefix}/lib64/'`echo ../../../../lib64/libgo.so.16.* | sed 's,^.*libg,libg,'`' )' > libgo.so
+echo 'INPUT ( %{_prefix}/lib/'`echo ../../../../lib64/libgo.so.16.* | sed 's,^.*libg,libg,'`' )' > 32/libgo.so
 %endif
 %if %{build_libquadmath}
 rm -f libquadmath.so
@@ -1802,7 +1818,7 @@ chmod 755 %{buildroot}%{_prefix}/%{_lib}/liblsan.so.0.*
 %endif
 %if %{build_go}
 # Avoid stripping these libraries and binaries.
-chmod 644 %{buildroot}%{_prefix}/%{_lib}/libgo.so.15.*
+chmod 644 %{buildroot}%{_prefix}/%{_lib}/libgo.so.16.*
 chmod 644 %{buildroot}%{_prefix}/bin/go.gcc
 chmod 644 %{buildroot}%{_prefix}/bin/gofmt.gcc
 chmod 644 %{buildroot}%{_prefix}/libexec/gcc/%{gcc_target_platform}/%{gcc_major}/cgo
@@ -2365,6 +2381,10 @@ end
 %dir %{_datadir}/gdb/auto-load
 %dir %{_datadir}/gdb/auto-load/%{_prefix}
 %dir %{_datadir}/gdb/auto-load/%{_prefix}/%{_lib}/
+# Package symlink to keep compatibility
+%ifarch riscv64
+%{_datadir}/gdb/auto-load/%{_prefix}/%{_lib}/lp64d
+%endif
 %{_datadir}/gdb/auto-load/%{_prefix}/%{_lib}/libstdc*gdb.py*
 %{_datadir}/gdb/auto-load/%{_prefix}/%{_lib}/__pycache__
 %dir %{_prefix}/share/gcc-%{gcc_major}
@@ -2886,7 +2906,7 @@ end
 %doc rpm.doc/go/*
 
 %files -n libgo
-%attr(755,root,root) %{_prefix}/%{_lib}/libgo.so.15*
+%attr(755,root,root) %{_prefix}/%{_lib}/libgo.so.16*
 %doc rpm.doc/libgo/*
 
 %files -n libgo-devel
@@ -2994,6 +3014,27 @@ end
 %endif
 
 %changelog
+* Sun Jan 26 2020 Jakub Jelinek <jakub@redhat.com> 10.0.1-0.6
+- update from trunk
+  - PRs analyzer/93367, c++/90997, c++/92852, c++/93279, c++/93299, c++/93377,
+	c++/93400, c++/93414, inline-asm/93027, ipa/93166, target/13721,
+	target/92269, target/93395, target/93412, target/93430,
+	translation/90162, tree-optimization/92788
+- temporarily disable broken strcmp optimization (PR tree-optimization/92765)
+- riscv64 tweaks from David Abdurachmanov (#1794343)
+
+* Thu Jan 23 2020 Jakub Jelinek <jakub@redhat.com> 10.0.1-0.5
+- update from trunk
+  - PRs analyzer/93307, analyzer/93316, analyzer/93352, analyzer/93375,
+	analyzer/93378, analyzer/93382, c++/40752, c++/60855, c++/90732,
+	c++/91476, c++/92804, c++/92907, c++/93324, c++/93331, c++/93345,
+	c/84919, c/93348, fortran/93329, ipa/93315, libstdc++/91947,
+	rtl-optimization/93124, rtl-optimization/93402, target/91298,
+	target/92424, target/9311, target/93119, target/93333, target/93335,
+	target/93341, target/93346, target/93376, testsuite/93391,
+	tree-optimization/92924, tree-optimization/93381
+  - fix ICE in nothrow_spec_p (#1794094, c++/93345)
+
 * Tue Jan 21 2020 Jakub Jelinek <jakub@redhat.com> 10.0.1-0.4
 - update from trunk
   - PRs c++/33799, c++/92536, debug/92763, fortran/44960, fortran/93309,
