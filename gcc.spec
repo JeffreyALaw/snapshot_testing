@@ -263,7 +263,6 @@ Patch12: gcc10-pr92765-workaround.patch
 
 Patch2000: sanitizer.patch
 Patch2001: sibcall.patch
-Patch2002: typesize.patch
 Patch2003: nocommon.patch
 Patch2004: pointerdiff.patch
 Patch2005: pr93166.patch
