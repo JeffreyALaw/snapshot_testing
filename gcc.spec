@@ -263,9 +263,8 @@ Patch12: gcc10-pr92765-workaround.patch
 
 Patch2000: sanitizer.patch
 Patch2001: sibcall.patch
-Patch2003: nocommon.patch
-Patch2004: pointerdiff.patch
-Patch2005: pr93166.patch
+Patch2002: nocommon.patch
+Patch2003: pointerdiff.patch
 
 
 # On ARM EABI systems, we do want -gnueabi to be part of the
@@ -782,10 +781,8 @@ to NVidia PTX capable devices if available.
 
 %patch2000 -p1
 %patch2001 -p1
-#%patch2002 -p1
+%patch2002 -p1
 %patch2003 -p1
-%patch2004 -p1
-%patch2005 -p1
 echo 'Red Hat %{version}-%{gcc_release}' > gcc/DEV-PHASE
 
 cp -a libstdc++-v3/config/cpu/i{4,3}86/atomicity.h
